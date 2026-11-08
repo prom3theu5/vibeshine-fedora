@@ -60,6 +60,9 @@ enabled=1
 gpgcheck=1
 repo_gpgcheck=1
 gpgkey=${base_url}/RPM-GPG-KEY-vibeshine-fedora
+# Releases are rare but fixes should arrive promptly; dnf's default can keep
+# stale metadata for days.
+metadata_expire=6h
 REPO
 
 cat > "$site/index.html" <<HTML
