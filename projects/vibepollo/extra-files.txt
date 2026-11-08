@@ -1,7 +1,6 @@
 # Installed by CMake but missing from upstream's RPM %files list (the Arch
 # package has no file list, so upstream never sees these). Appended to %files.
 # Vibepollo keeps some Vibeshine paths (libexec/vibeshine, lib64/vibeshine).
-%{_bindir}/vibepollo-%{build_semver}
 %{_prefix}/libexec/vibeshine/vibepollo-global-limiter.py
 %{_udevrulesdir}/70-vibepollo-uinput.rules
 %{_prefix}/lib/firewalld/services/vibepollo.xml

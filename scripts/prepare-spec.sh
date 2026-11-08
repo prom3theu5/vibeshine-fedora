@@ -9,6 +9,7 @@
 #     extra-globals.txt        prepended to the spec
 #     extra-preamble.txt       preamble tags, inserted after Release:
 #     extra-buildrequires.txt  one package per line, added as BuildRequires
+#     extra-install.txt        appended to %install (shell, run in the buildroot)
 #     extra-files.txt          appended to %files
 # Lines starting with # and blank lines in those files are ignored.
 # Usage: prepare-spec.sh <upstream.spec> <output.spec> <version> <commit> <release> <project-dir>
@@ -59,6 +60,14 @@ if [[ -n $buildrequires ]]; then
     "$out" > "$out.tmp" && mv "$out.tmp" "$out"
 fi
 
+install=$(entries extra-install.txt)
+if [[ -n $install ]]; then
+  # %install ends where %pre begins.
+  grep -qx '%pre' "$out" || { echo "spec has no %pre to insert before" >&2; exit 1; }
+  awk -v add="$install" '/^%pre$/ && !done { print add; print ""; done = 1 } { print }' \
+    "$out" > "$out.tmp" && mv "$out.tmp" "$out"
+fi
+
 files=$(entries extra-files.txt)
 if [[ -n $files ]]; then
   grep -q '^%changelog' "$out" || { echo "spec has no %changelog to insert before" >&2; exit 1; }
@@ -66,6 +75,6 @@ if [[ -n $files ]]; then
     "$out" > "$out.tmp" && mv "$out.tmp" "$out"
 fi
 
-while read -r line; do
+while IFS= read -r line; do
   [[ -z $line ]] || grep -qxF -- "$line" "$out" || { echo "failed to add: $line" >&2; exit 1; }
-done < <(printf '%s\n%s\n%s\n%s\n' "$globals" "$preamble" "$buildrequires" "$files")
+done < <(printf '%s\n%s\n%s\n%s\n%s\n' "$globals" "$preamble" "$buildrequires" "$install" "$files")

@@ -1,6 +1,5 @@
 # Installed by CMake but missing from upstream's RPM %files list (the Arch
 # package has no file list, so upstream never sees these). Appended to %files.
-%{_bindir}/vibeshine-%{build_semver}
 %{_prefix}/libexec/vibeshine/vibeshine-global-limiter.py
 %{_udevrulesdir}/70-vibeshine-uinput.rules
 %{_prefix}/lib/firewalld/services/vibeshine.xml

@@ -1,0 +1,9 @@
+# Appended to %install. CMake installs the executable versioned (its VERSION
+# property: vibepollo-<version>) with %{_bindir}/vibepollo as a symlink to it, but %post
+# refuses a symlinked public entrypoint ("native executable is missing or
+# unsafe"). Upstream's Arch hook resolves the link; the RPM scriptlet does not.
+# Make %{_bindir}/vibepollo the real file.
+if [ -L %{buildroot}%{_bindir}/vibepollo ]; then
+  rm -f %{buildroot}%{_bindir}/vibepollo
+  mv %{buildroot}%{_bindir}/vibepollo-%{build_semver} %{buildroot}%{_bindir}/vibepollo
+fi
