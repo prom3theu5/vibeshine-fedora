@@ -1,3 +1,5 @@
 # Spec preamble tags, inserted after Release:.
 # Vibeshine and Vibepollo share files and ports; only one can be installed.
 Conflicts: vibepollo
+# The tray (/usr/bin/vibeshine-tray) is a PySide6 app; Arch declares pyside6, the RPM spec does not.
+Requires: python3-pyside6
