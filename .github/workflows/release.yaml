@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Upstream tag to build (default: latest stable)
+        description: "Upstream tag to build (default: latest stable)"
         required: false
         type: string
       package_release:
