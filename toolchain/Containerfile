@@ -1,0 +1,56 @@
+# Vibeshine RPM build toolchain for Fedora: RPM tooling, npm, CUDA 12.9 at
+# /opt/cuda, GCC 14 as CUDA's host compiler, and upstream's build dependencies.
+# Published as ghcr.io/prom3theu5/vibeshine-fedora-toolchain:f<FEDORA_VERSION>.
+# Build context: this directory.
+
+ARG FEDORA_VERSION=44
+FROM docker.io/library/fedora:${FEDORA_VERSION}
+
+RUN dnf -y install --setopt=install_weak_deps=False \
+        rpm-build rpmdevtools dnf5-plugins git-core wget patch which \
+        nodejs-npm \
+ && dnf clean all
+
+# CUDA 12.9 is the newest release that still builds for Pascal (GTX 10-series),
+# which upstream's release packages require. It is installed once here instead
+# of being downloaded by the spec during %build.
+ARG CUDA_VERSION=12.9.1
+ARG CUDA_BUILD=575.57.08
+ARG CUDA_SHA256=0f6d806ddd87230d2adbe8a6006a9d20144fdbda9de2d6acc677daa5d036417a
+RUN wget -q --tries=3 -O /tmp/cuda.run \
+        "https://developer.download.nvidia.com/compute/cuda/${CUDA_VERSION}/local_installers/cuda_${CUDA_VERSION}_${CUDA_BUILD}_linux.run" \
+ && echo "${CUDA_SHA256}  /tmp/cuda.run" | sha256sum -c - \
+ && sh /tmp/cuda.run --silent --toolkit --toolkitpath=/opt/cuda \
+        --no-drm --no-man-page --no-opengl-libs --override \
+ && rm -f /tmp/cuda.run \
+ && rm -rf /opt/cuda/nsight* /opt/cuda/libnvvp /opt/cuda/extras/demo_suite
+
+# CUDA 12.9's math headers conflict with glibc 2.41+. The spec applies this
+# patch only when it installs CUDA itself, so it is applied here. Vendored from
+# upstream's packaging/linux/patches/x86_64/cuda-12-math_functions.patch.
+COPY patches/cuda-12-math_functions.patch /tmp/cuda.patch
+RUN patch -p2 --forward --directory=/opt/cuda < /tmp/cuda.patch && rm /tmp/cuda.patch
+
+# CUDA 12.9 accepts GCC 14 at most, and the spec builds with gcc-14/g++-14.
+# Fedora 44 ships GCC 16 and a gcc15 compat package; its gcc14 build exists
+# only in Koji. Koji builds are unsigned, so they are pinned by checksum.
+ARG GCC14_NVR=14.3.1-1.fc44.1
+ARG GCC14_SHA256=7566d99ff1850f4124a69a96e160e91f98c507f7d6d5c741adcf7824b0afc6bb
+ARG GCC14_CXX_SHA256=4f611c495861ea2d48e1545b1f81c1e0a3f9a821c604ba083baeedcffd2cd8bb
+RUN cd /tmp \
+ && base="https://kojipkgs.fedoraproject.org/packages/gcc14/${GCC14_NVR%%-*}/${GCC14_NVR#*-}/x86_64" \
+ && wget -q --tries=3 "${base}/gcc14-${GCC14_NVR}.x86_64.rpm" "${base}/gcc14-c++-${GCC14_NVR}.x86_64.rpm" \
+ && printf '%s  %s\n' "${GCC14_SHA256}" "gcc14-${GCC14_NVR}.x86_64.rpm" \
+        "${GCC14_CXX_SHA256}" "gcc14-c++-${GCC14_NVR}.x86_64.rpm" | sha256sum -c - \
+ && dnf -y install ./gcc14-*.rpm \
+ && dnf clean all && rm -f ./gcc14-*.rpm
+# Custom nvcc invocations do not always inherit CMAKE_CUDA_HOST_COMPILER.
+ENV NVCC_CCBIN=g++-14
+
+# Preinstall upstream's build dependencies so release builds rarely install
+# anything. The release build still runs builddep for its own spec.
+ARG VIBESHINE_SPEC_REF=master
+RUN wget -q --tries=3 -O /tmp/vibeshine.spec \
+        "https://raw.githubusercontent.com/Nonary/vibeshine/${VIBESHINE_SPEC_REF}/packaging/linux/copr/Sunshine.spec" \
+ && dnf -y builddep /tmp/vibeshine.spec \
+ && dnf clean all && rm /tmp/vibeshine.spec

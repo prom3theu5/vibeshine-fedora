@@ -1,0 +1,51 @@
+version: "3"
+
+vars:
+  VIBESHINE_REF:
+    sh: bash scripts/latest.sh
+  PACKAGE_RELEASE: '{{.PACKAGE_RELEASE | default "1"}}'
+
+tasks:
+  latest:
+    desc: Print upstream Vibeshine's latest stable tag
+    cmds:
+      - echo "{{.VIBESHINE_REF}}"
+
+  toolchain:
+    desc: Build the toolchain image locally under its published tag, so build uses it
+    cmds:
+      - docker buildx build --load -f toolchain/Containerfile -t ghcr.io/prom3theu5/vibeshine-fedora-toolchain:f44 toolchain
+
+  build:
+    desc: Build Vibeshine RPMs into dist/ (VIBESHINE_REF=x.y.z to pin a tag)
+    cmds:
+      - rm -rf dist
+      - >-
+        docker buildx build -f Containerfile
+        --build-arg VIBESHINE_REF={{.VIBESHINE_REF}}
+        --build-arg PACKAGE_RELEASE={{.PACKAGE_RELEASE}}
+        --output type=local,dest=dist .
+      - ls -lh dist
+
+  repo:
+    desc: Build a local dnf repository from dist/ into repo/ (unsigned, for testing)
+    cmds:
+      - rm -rf repo && mkdir -p repo
+      - cp dist/*.x86_64.rpm repo/
+      - docker run --rm -v "$PWD/repo:/repo:Z" docker.io/library/fedora:44 sh -c 'dnf -y -q install createrepo_c && createrepo_c /repo'
+
+  signing-key:
+    desc: Generate the RPM signing key and store it as the RPM_SIGNING_KEY repo secret
+    interactive: true
+    cmds:
+      - |
+        set -euo pipefail
+        export GNUPGHOME=$(mktemp -d)
+        trap 'rm -rf "$GNUPGHOME"' EXIT
+        gpg --batch --passphrase '' --quick-gen-key "Vibeshine Fedora RPM signing" rsa4096 sign never
+        fpr=$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "fpr" { print $10; exit }')
+        gpg --batch --armor --export-secret-keys "$fpr" | gh secret set RPM_SIGNING_KEY
+        gpg --batch --armor --export-secret-keys "$fpr" > vibeshine-fedora-signing-key.asc
+        chmod 600 vibeshine-fedora-signing-key.asc
+        echo "Secret set. Fingerprint: $fpr"
+        echo "Move vibeshine-fedora-signing-key.asc into your password manager, then delete it."

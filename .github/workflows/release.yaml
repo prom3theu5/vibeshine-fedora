@@ -1,0 +1,194 @@
+name: Release
+
+# Builds a new upstream Vibeshine stable tag into signed Fedora RPMs, publishes
+# them as a GitHub release, and regenerates the dnf repository on GitHub Pages.
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Upstream tag to build (default: latest stable)
+        required: false
+        type: string
+      package_release:
+        description: RPM release number (bump to rebuild the same upstream tag)
+        required: false
+        default: "1"
+        type: string
+      repo_only:
+        description: Only regenerate the dnf repository from existing releases
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  FEDORA_VERSION: "44"
+  # Releases kept in the dnf repository. Older ones stay on GitHub Releases.
+  REPO_KEEP: "3"
+
+jobs:
+  check:
+    name: Check upstream
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.vars.outputs.ref }}
+      tag: ${{ steps.vars.outputs.tag }}
+      build: ${{ steps.vars.outputs.build }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve version
+        id: vars
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_RELEASE: ${{ inputs.package_release || '1' }}
+          REPO_ONLY: ${{ inputs.repo_only || false }}
+        run: |
+          set -euo pipefail
+          ref=${INPUT_REF:-$(bash scripts/latest.sh)}
+          [[ $ref =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad ref: $ref" >&2; exit 1; }
+          [[ $INPUT_RELEASE =~ ^[0-9]+$ ]] || { echo "bad release: $INPUT_RELEASE" >&2; exit 1; }
+          tag="${ref#v}-${INPUT_RELEASE}"
+          build=true
+          if [[ $REPO_ONLY == true ]] || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            build=false
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Upstream $ref -> release $tag (build: $build)" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build RPMs
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v5
+
+      # The toolchain image (CUDA) and the build tree need more than the
+      # runner's default free space.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build
+        env:
+          REF: ${{ needs.check.outputs.ref }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          docker buildx build -f Containerfile \
+            --build-arg FEDORA_VERSION="$FEDORA_VERSION" \
+            --build-arg VIBESHINE_REF="$REF" \
+            --build-arg PACKAGE_RELEASE="${TAG##*-}" \
+            --output type=local,dest=dist .
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpms
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Sign and release
+    needs: [check, build]
+    runs-on: ubuntu-24.04
+    container: docker.io/library/fedora:44
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: rpms
+          path: dist
+
+      - name: Install tools
+        run: dnf -y -q install rpm-sign gnupg2 gh
+
+      - name: Sign packages
+        env:
+          RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
+        run: bash scripts/sign-rpms.sh dist
+
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/*.rpm
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ needs.check.outputs.ref }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          notes="Fedora ${FEDORA_VERSION} build of upstream Vibeshine [\`${REF}\`](https://github.com/Nonary/vibeshine/releases/tag/${REF}).
+          The source RPM contains the exact upstream source these packages were built from."
+          gh release create "$TAG" dist/*.rpm dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --title "Vibeshine ${REF} (Fedora, release ${TAG##*-})" --notes "$notes"
+
+  repo:
+    name: Build dnf repository
+    needs: [check, release]
+    # Runs after a new release, or on its own when repo_only is set.
+    if: always() && (needs.release.result == 'success' || (needs.check.result == 'success' && needs.check.outputs.build == 'false'))
+    runs-on: ubuntu-24.04
+    container: docker.io/library/fedora:44
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install tools
+        run: dnf -y -q install createrepo_c gnupg2 gh
+
+      - name: Assemble repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
+        run: bash scripts/build-repo.sh site
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to Pages
+    needs: repo
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
