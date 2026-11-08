@@ -42,6 +42,7 @@ ARG PROJECT
 ARG REF
 ARG PACKAGE_RELEASE=1
 COPY scripts/prepare-spec.sh /usr/local/bin/prepare-spec
+COPY scripts/fix-template-mask-probe.sh /usr/local/bin/fix-template-mask-probe.sh
 COPY projects/${PROJECT}/ /tmp/project/
 COPY --from=source /src/upstream/packaging/linux/copr/Sunshine.spec /tmp/upstream.spec
 COPY --from=source /src/commit /tmp/commit

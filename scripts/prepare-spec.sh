@@ -3,6 +3,8 @@
 # - fills the version, branch and commit placeholders, as upstream's COPR
 #   pipeline does, and sets the RPM release;
 # - points CUDA at the toolchain image's /opt/cuda;
+# - fixes the scriptlets' masked-template check for systemd 259+
+#   (fix-template-mask-probe.sh, next to this script);
 # - applies the project's fixes from <project-dir>, each optional:
 #     extra-globals.txt        prepended to the spec
 #     extra-preamble.txt       preamble tags, inserted after Release:
@@ -36,6 +38,8 @@ for expected in \
   "%global cuda_dir /opt/cuda"; do
   grep -qxF "$expected" "$out" || { echo "spec placeholder not found: $expected" >&2; exit 1; }
 done
+
+"$(dirname "$0")/fix-template-mask-probe.sh" "$out"
 
 globals=$(entries extra-globals.txt)
 if [[ -n $globals ]]; then

@@ -1,5 +1,8 @@
 # Spec preamble tags, inserted after Release:.
-# Vibeshine and Vibepollo share files and ports; only one can be installed.
+# Vibeshine and Vibepollo share files and ports with each other and with Sunshine
+# (LizardByte packages it as Sunshine; some repos as sunshine); only one can be installed.
 Conflicts: vibeshine
+Conflicts: Sunshine
+Conflicts: sunshine
 # The tray (/usr/bin/vibepollo-tray) is a PySide6 app; Arch declares pyside6, the RPM spec does not.
 Requires: python3-pyside6
