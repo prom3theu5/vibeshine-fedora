@@ -8,6 +8,7 @@ on:
     branches: [main]
     paths:
       - toolchain/**
+      - projects/*/extra-buildrequires.txt
       - .github/workflows/toolchain.yaml
   schedule:
     - cron: "41 3 * * 1"
@@ -64,7 +65,7 @@ jobs:
       - id: push
         uses: docker/build-push-action@v6
         with:
-          context: toolchain
+          context: .
           file: toolchain/Containerfile
           build-args: FEDORA_VERSION=${{ env.FEDORA_VERSION }}
           tags: ${{ steps.tags.outputs.tags }}

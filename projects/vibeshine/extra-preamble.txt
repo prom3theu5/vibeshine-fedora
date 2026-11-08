@@ -1,0 +1,3 @@
+# Spec preamble tags, inserted after Release:.
+# Vibeshine and Vibepollo share files and ports; only one can be installed.
+Conflicts: vibepollo

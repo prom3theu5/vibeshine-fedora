@@ -1,15 +1,23 @@
 name: Release
 
-# Builds a new upstream Vibeshine stable tag into signed Fedora RPMs, publishes
-# them as a GitHub release, and regenerates the dnf repository on GitHub Pages.
+# For each project in projects/ (Vibeshine, Vibepollo): builds a new upstream
+# stable tag into signed Fedora RPMs and publishes it as a GitHub release
+# tagged <project>-<version>-<release>. Then regenerates the dnf repository on
+# GitHub Pages. Days without a new upstream release only run the check.
 
 on:
   schedule:
     - cron: "17 5 * * *"
   workflow_dispatch:
     inputs:
+      project:
+        description: "Project to build (default: all)"
+        required: false
+        default: all
+        type: choice
+        options: [all, vibeshine, vibepollo]
       ref:
-        description: "Upstream tag to build (default: latest stable)"
+        description: "Upstream tag to build (default: latest stable; needs a single project)"
         required: false
         type: string
       package_release:
@@ -32,7 +40,8 @@ concurrency:
 
 env:
   FEDORA_VERSION: "44"
-  # Releases kept in the dnf repository. Older ones stay on GitHub Releases.
+  # Releases per project indexed by the dnf repository (packages are served
+  # from GitHub Releases; Pages hosts only the signed metadata).
   REPO_KEEP: "3"
 
 jobs:
@@ -40,42 +49,60 @@ jobs:
     name: Check upstream
     runs-on: ubuntu-24.04
     outputs:
-      ref: ${{ steps.vars.outputs.ref }}
-      tag: ${{ steps.vars.outputs.tag }}
-      build: ${{ steps.vars.outputs.build }}
+      matrix: ${{ steps.vars.outputs.matrix }}
     steps:
       - uses: actions/checkout@v5
 
-      - name: Resolve version
+      - name: Find releases to build
         id: vars
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_PROJECT: ${{ inputs.project || 'all' }}
           INPUT_REF: ${{ inputs.ref }}
           INPUT_RELEASE: ${{ inputs.package_release || '1' }}
           REPO_ONLY: ${{ inputs.repo_only || false }}
         run: |
           set -euo pipefail
-          ref=${INPUT_REF:-$(bash scripts/latest.sh)}
-          [[ $ref =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad ref: $ref" >&2; exit 1; }
           [[ $INPUT_RELEASE =~ ^[0-9]+$ ]] || { echo "bad release: $INPUT_RELEASE" >&2; exit 1; }
-          tag="${ref#v}-${INPUT_RELEASE}"
-          build=true
-          if [[ $REPO_ONLY == true ]] || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            build=false
+          if [[ -n $INPUT_REF && $INPUT_PROJECT == all ]]; then
+            echo "ref needs a single project" >&2; exit 1
           fi
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "build=$build" >> "$GITHUB_OUTPUT"
-          echo "Upstream $ref -> release $tag (build: $build)" >> "$GITHUB_STEP_SUMMARY"
+          entries=()
+          for dir in projects/*/; do
+            project=$(basename "$dir")
+            [[ $INPUT_PROJECT == all || $INPUT_PROJECT == "$project" ]] || continue
+            upstream=$(cat "$dir/upstream")
+            ref=${INPUT_REF:-$(bash scripts/latest.sh "$upstream")}
+            [[ $ref =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad ref for $project: $ref" >&2; exit 1; }
+            tag="${project}-${ref#v}-${INPUT_RELEASE}"
+            if [[ $REPO_ONLY == true ]] || gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "- $project: $tag exists or repo_only set, skipping" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+            echo "- $project: building $tag from $upstream $ref" >> "$GITHUB_STEP_SUMMARY"
+            entries+=("$(jq -cn --arg project "$project" --arg upstream "$upstream" \
+              --arg ref "$ref" --arg tag "$tag" --arg release "$INPUT_RELEASE" \
+              '{project: $project, upstream: $upstream, ref: $ref, tag: $tag, release: $release}')")
+          done
+          if (( ${#entries[@]} )); then
+            matrix=$(printf '%s\n' "${entries[@]}" | jq -cs .)
+          else
+            matrix='[]'
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build RPMs
+    name: Build ${{ matrix.target.tag }}
     needs: check
-    if: needs.check.outputs.build == 'true'
+    if: needs.check.outputs.matrix != '[]'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.check.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v5
 
@@ -97,39 +124,59 @@ jobs:
 
       - name: Build
         env:
-          REF: ${{ needs.check.outputs.ref }}
-          TAG: ${{ needs.check.outputs.tag }}
+          PROJECT: ${{ matrix.target.project }}
+          UPSTREAM: ${{ matrix.target.upstream }}
+          REF: ${{ matrix.target.ref }}
+          RELEASE: ${{ matrix.target.release }}
         run: |
           docker buildx build -f Containerfile \
             --build-arg FEDORA_VERSION="$FEDORA_VERSION" \
-            --build-arg VIBESHINE_REF="$REF" \
-            --build-arg PACKAGE_RELEASE="${TAG##*-}" \
+            --build-arg PROJECT="$PROJECT" \
+            --build-arg UPSTREAM="$UPSTREAM" \
+            --build-arg REF="$REF" \
+            --build-arg PACKAGE_RELEASE="$RELEASE" \
             --output type=local,dest=dist .
           ls -lh dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rpms
+          name: rpms-${{ matrix.target.project }}
           path: dist/
           if-no-files-found: error
           retention-days: 7
 
   release:
-    name: Sign and release
+    name: Release ${{ matrix.target.tag }}
     needs: [check, build]
+    # Release each project whose build succeeded, even if another failed.
+    if: always() && needs.check.result == 'success' && needs.check.outputs.matrix != '[]'
     runs-on: ubuntu-24.04
     container: docker.io/library/fedora:44
     permissions:
       contents: write
       id-token: write
       attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.check.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/download-artifact@v5
+        id: download
+        continue-on-error: true
         with:
-          name: rpms
+          name: rpms-${{ matrix.target.project }}
           path: dist
+
+      - name: Stop if the build failed
+        if: steps.download.outcome != 'success'
+        env:
+          TAG: ${{ matrix.target.tag }}
+        run: |
+          echo "No packages for $TAG: its build failed." >&2
+          exit 1
 
       - name: Install tools
         run: dnf -y -q install rpm-sign gnupg2 gh
@@ -146,21 +193,26 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
-          REF: ${{ needs.check.outputs.ref }}
-          TAG: ${{ needs.check.outputs.tag }}
+          UPSTREAM: ${{ matrix.target.upstream }}
+          REF: ${{ matrix.target.ref }}
+          TAG: ${{ matrix.target.tag }}
+          RELEASE: ${{ matrix.target.release }}
         run: |
           set -euo pipefail
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          notes="Fedora ${FEDORA_VERSION} build of upstream Vibeshine [\`${REF}\`](https://github.com/Nonary/vibeshine/releases/tag/${REF}).
+          name=${UPSTREAM#*/}
+          notes="Fedora ${FEDORA_VERSION} build of upstream ${name} [\`${REF}\`](https://github.com/${UPSTREAM}/releases/tag/${REF}).
           The source RPM contains the exact upstream source these packages were built from."
           gh release create "$TAG" dist/*.rpm dist/SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" --title "Vibeshine ${REF} (Fedora, release ${TAG##*-})" --notes "$notes"
+            --repo "$GITHUB_REPOSITORY" --title "${name} ${REF} (Fedora, release ${RELEASE})" --notes "$notes"
 
   repo:
     name: Build dnf repository
     needs: [check, release]
-    # Runs after a new release, or on its own when repo_only is set.
-    if: always() && (needs.release.result == 'success' || (needs.check.result == 'success' && needs.check.outputs.build == 'false'))
+    # After a run that released something, or on its own when repo_only is set.
+    # A matrix job's result is success only if every leg succeeded, so a run
+    # where one project failed still publishes when the other released.
+    if: always() && needs.check.result == 'success' && (needs.release.result == 'success' || needs.release.result == 'failure' || inputs.repo_only)
     runs-on: ubuntu-24.04
     container: docker.io/library/fedora:44
     steps:

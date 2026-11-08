@@ -1,0 +1,8 @@
+# Build dependencies CMake needs that upstream's RPM spec does not declare
+# (the Arch PKGBUILD has them). prepare-spec.sh adds each as a BuildRequires,
+# and the toolchain image preinstalls them. One package per line.
+sqlite-devel
+kwin-devel
+qt6-qtbase-devel
+wayland-protocols-devel
+libjpeg-turbo-devel

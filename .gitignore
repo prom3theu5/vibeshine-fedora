@@ -1,3 +1,4 @@
 dist/
 repo/
 vibeshine-fedora-signing-key.asc
+dist-*/

@@ -1,7 +1,7 @@
 # Vibeshine RPM build toolchain for Fedora: RPM tooling, npm, CUDA 12.9 at
 # /opt/cuda, GCC 14 as CUDA's host compiler, and upstream's build dependencies.
 # Published as ghcr.io/prom3theu5/vibeshine-fedora-toolchain:f<FEDORA_VERSION>.
-# Build context: this directory.
+# Build context: the repository root.
 
 ARG FEDORA_VERSION=44
 FROM docker.io/library/fedora:${FEDORA_VERSION}
@@ -28,7 +28,7 @@ RUN wget -q --tries=3 -O /tmp/cuda.run \
 # CUDA 12.9's math headers conflict with glibc 2.41+. The spec applies this
 # patch only when it installs CUDA itself, so it is applied here. Vendored from
 # upstream's packaging/linux/patches/x86_64/cuda-12-math_functions.patch.
-COPY patches/cuda-12-math_functions.patch /tmp/cuda.patch
+COPY toolchain/patches/cuda-12-math_functions.patch /tmp/cuda.patch
 RUN patch -p2 --forward --directory=/opt/cuda < /tmp/cuda.patch && rm /tmp/cuda.patch
 
 # CUDA 12.9 accepts GCC 14 at most, and the spec builds with gcc-14/g++-14.
@@ -50,7 +50,12 @@ ENV NVCC_CCBIN=g++-14
 # Preinstall upstream's build dependencies so release builds rarely install
 # anything. The release build still runs builddep for its own spec.
 ARG VIBESHINE_SPEC_REF=master
+# Only the last layer depends on projects/, so editing a project's fix files
+# reruns just this step.
+COPY projects/ /tmp/projects/
 RUN wget -q --tries=3 -O /tmp/vibeshine.spec \
         "https://raw.githubusercontent.com/Nonary/vibeshine/${VIBESHINE_SPEC_REF}/packaging/linux/copr/Sunshine.spec" \
  && dnf -y builddep /tmp/vibeshine.spec \
- && dnf clean all && rm /tmp/vibeshine.spec
+ && cat /tmp/projects/*/extra-buildrequires.txt | grep -v -e '^#' -e '^[[:space:]]*$' | sort -u \
+    | xargs -r dnf -y install --setopt=install_weak_deps=False \
+ && dnf clean all && rm -rf /tmp/vibeshine.spec /tmp/projects

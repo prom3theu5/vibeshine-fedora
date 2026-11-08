@@ -1,28 +1,34 @@
 version: "3"
 
 vars:
-  VIBESHINE_REF:
-    sh: bash scripts/latest.sh
+  # vibeshine or vibepollo: a directory in projects/.
+  PROJECT: '{{.PROJECT | default "vibeshine"}}'
+  UPSTREAM:
+    sh: cat projects/{{.PROJECT}}/upstream
+  REF:
+    sh: '[ -n "{{.REF}}" ] && echo "{{.REF}}" || bash scripts/latest.sh "$(cat projects/{{.PROJECT}}/upstream)"'
   PACKAGE_RELEASE: '{{.PACKAGE_RELEASE | default "1"}}'
 
 tasks:
   latest:
-    desc: Print upstream Vibeshine's latest stable tag
+    desc: Print the project's latest upstream stable tag (PROJECT=vibeshine|vibepollo)
     cmds:
-      - echo "{{.VIBESHINE_REF}}"
+      - echo "{{.UPSTREAM}} {{.REF}}"
 
   toolchain:
     desc: Build the toolchain image locally under its published tag, so build uses it
     cmds:
-      - docker buildx build --load -f toolchain/Containerfile -t ghcr.io/prom3theu5/vibeshine-fedora-toolchain:f44 toolchain
+      - docker buildx build --load -f toolchain/Containerfile -t ghcr.io/prom3theu5/vibeshine-fedora-toolchain:f44 .
 
   build:
-    desc: Build Vibeshine RPMs into dist/ (VIBESHINE_REF=x.y.z to pin a tag)
+    desc: Build RPMs into dist/ (PROJECT=vibeshine|vibepollo, REF=x.y.z to pin a tag)
     cmds:
       - rm -rf dist
       - >-
         docker buildx build -f Containerfile
-        --build-arg VIBESHINE_REF={{.VIBESHINE_REF}}
+        --build-arg PROJECT={{.PROJECT}}
+        --build-arg UPSTREAM={{.UPSTREAM}}
+        --build-arg REF={{.REF}}
         --build-arg PACKAGE_RELEASE={{.PACKAGE_RELEASE}}
         --output type=local,dest=dist .
       - ls -lh dist

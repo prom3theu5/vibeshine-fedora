@@ -1,0 +1,5 @@
+# Prepended to the spec. The bundled NVIDIA TrueHDR libraries are private to
+# Vibepollo: do not advertise their sonames to the system, and do not derive
+# requirements from them that no Fedora package provides.
+%global __provides_exclude_from ^%{_libdir}/vibeshine/.*$
+%global __requires_exclude_from ^%{_libdir}/vibeshine/.*$

@@ -1,0 +1,10 @@
+# Installed by CMake but missing from upstream's RPM %files list (the Arch
+# package has no file list, so upstream never sees these). Appended to %files.
+%{_bindir}/vibeshine-%{build_semver}
+%{_prefix}/libexec/vibeshine/vibeshine-global-limiter.py
+%{_udevrulesdir}/70-vibeshine-uinput.rules
+%{_prefix}/lib/firewalld/services/vibeshine.xml
+%config(noreplace) %{_sysconfdir}/ufw/applications.d/vibeshine
+%{_datadir}/pipewire/pipewire.conf.d/50-vibeshine-audio.conf
+# NVIDIA TrueHDR runtime: prebuilt libraries bundled by upstream.
+%{_libdir}/vibeshine/
